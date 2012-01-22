@@ -2,11 +2,14 @@ module Network.SPDY
     ( parse
 
     , ControlFrameHeader(ControlFrameHeader)
+    , StatusCode (
+	ProtocolError )
     , Frame(
 	  Ping
 	, Noop
 	, SynStream
-	, RstStream) )
+	, RstStream
+	, GoAway ) )
     where
 
 
@@ -97,8 +100,7 @@ data Frame = SynStream {
 	    , id:: Word32 }
 	| GoAway {
 	      header:: ControlFrameHeader
-	    , lastGoodStreamId:: StreamID
-	    , status:: StatusCode }	
+	    , lastGoodStreamId:: StreamID }	
 	| Headers {
 	      header:: ControlFrameHeader
 	    , streamId:: StreamID
@@ -109,7 +111,7 @@ data Frame = SynStream {
 	    , deltaWindowSize:: Word32 }
 	| Data {
 	      streamId:: StreamID
-	    , dateFlags:: Flags
+	    , dataFlags:: Flags
 	    , payload:: BS.ByteString }
 	deriving (Show, Eq)
 	      
@@ -178,15 +180,13 @@ parseControlPayload NoopType header = do
 parseControlPayload GoAwayType header = do
 	BG.skip 1
 	lastStreamId <- BG.getAsWord32 31
-	statusCode <- parseStatusCode
-	return $ GoAway header lastStreamId statusCode
+	return $ GoAway header lastStreamId 
 
 parseControlPayload HeadersType header = do
 	BG.skip 1
 	lastStreamId <- BG.getAsWord32 31
 	nvHeaders <- parseNvHeaders
 	return $ Headers header lastStreamId nvHeaders
-
 
 parseControlPayload WindowUpdateType header = do
 	BG.skip 1

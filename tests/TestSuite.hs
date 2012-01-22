@@ -14,7 +14,9 @@ main = defaultMain tests
 tests = [testGroup "FrameParsing" [
 	      testCase "Noop" testNoop
 	    , testCase "Ping" testPing
-	    , testCase "SynStream" testSynStream]]
+	    , testCase "SynStream" testSynStream
+	    , testCase "RstStream" testRstStream
+	    , testCase "GoAway" testGoAway]]
 
 testParseFrame :: BS.ByteString -> SP.Frame -> Assertion
 testParseFrame bs frame = Just frame @?= SP.parse bs
@@ -31,6 +33,24 @@ testPing = testParseFrame bs fr
 	bs = BS.pack [128, 2, 0, 6
 		     , 0, 0, 0, 4 
         	     , 0, 0, 0, 123]
+
+testRstStream = testParseFrame bs fr
+    where
+	fr = RstStream (ControlFrameHeader 2 Set.empty 8) 1 ProtocolError
+	headers = Map.empty 
+	bs = BS.pack [ 128, 2, 0, 3,
+		       0, 0, 0, 8, 
+		       0x00, 0x00, 0x00, 0x01, -- Stream ID
+		       0x00, 0x00, 0x00, 0x01 -- Status Code
+		     ]
+
+testGoAway = testParseFrame bs fr
+    where
+	fr = GoAway (ControlFrameHeader 2 Set.empty 4) 42
+	bs = BS.pack [ 128, 2, 0, 7,
+		       0, 0, 0, 4, 
+		       0x00, 0x00, 0x00, 42 -- Stream ID
+		     ]
 
 testSynStream = testParseFrame bs fr
     where
