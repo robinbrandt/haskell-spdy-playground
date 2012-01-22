@@ -2,7 +2,11 @@ module Network.SPDY
     ( parse
 
     , ControlFrameHeader(ControlFrameHeader)
-    , Frame(Ping) )
+    , Frame(
+	  Ping
+	, Noop
+	, SynStream
+	, RstStream) )
     where
 
 
@@ -14,6 +18,8 @@ import Data.Binary.Strict.BitGet as BG
 import Data.Binary.Strict.Get as G
 import Data.Bits
 import qualified Data.Map as Map
+import qualified Codec.Zlib as Zlib
+import qualified Data.ByteString.UTF8 as SU8
 
 type StreamID = Word32
 
@@ -61,6 +67,7 @@ data ControlFrameType =  SynStreamType
 		| SynReplyType
 		| RstStreamType
 		| SettingsType
+		| NoopType
 		| PingType
 		| GoAwayType
 		| HeadersType
@@ -83,6 +90,8 @@ data Frame = SynStream {
 	| Settings {
 	      header:: ControlFrameHeader
 	    , entries:: SettingsEntries }
+	| Noop {
+	      header:: ControlFrameHeader }
 	| Ping {
 	      header:: ControlFrameHeader
 	    , id:: Word32 }
@@ -163,6 +172,8 @@ parseControlPayload PingType header = do
 	id <- BG.getWord32be
 	return $ Ping header id
 
+parseControlPayload NoopType header = do
+	return $ Noop header
 
 parseControlPayload GoAwayType header = do
 	BG.skip 1
@@ -204,8 +215,8 @@ parseSettingsEntries = do
     return values
  
     where parseOneEntry = do
-		flags <- parseBitSet 8 [(SettingsPersistValue, 1)
-				       ,(SettingsPersisted, 2)]
+		flags <- parseBitSet [(SettingsPersistValue, 1)
+				     ,(SettingsPersisted, 2)]
 		id <- BG.getAsWord32 24
 		val <- BG.getWord32be
 		return (UploadBandwidth, flags, val)
@@ -217,7 +228,7 @@ parseNvHeaders = return $ Map.empty
     
 
 parsePriority :: BG.BitGet Word8
-parsePriority = BG.getAsWord8 3
+parsePriority = BG.getAsWord8 2 
 
 parseData :: BG.BitGet Frame
 parseData = do
@@ -231,28 +242,29 @@ parseControlFrameType = do
 	2 -> SynReplyType
 	3 -> RstStreamType
 	4 -> SettingsType
+	5 -> NoopType
 	6 -> PingType
 	7 -> GoAwayType
 	8 -> HeadersType
 	9 -> WindowUpdateType
 
 parseFlags :: ControlFrameType -> BG.BitGet Flags
-parseFlags SynStreamType = parseBitSet 8 [(FLAG_FIN, 1)
+parseFlags SynStreamType = parseBitSet [(FLAG_FIN, 1)
 				      , (FLAG_UNIDIRECTIONAL, 2)]
-parseFlags SynReplyType = parseBitSet 8  [(FLAG_FIN, 1)]
-parseFlags HeadersType = parseBitSet 8 [(FLAG_FIN, 1)]
-parseFlags SettingsType = parseBitSet 8 [(FLAG_SETTINGS_CLEAR_SETTINGS, 1)]
+parseFlags SynReplyType = parseBitSet  [(FLAG_FIN, 1)]
+parseFlags HeadersType = parseBitSet [(FLAG_FIN, 1)]
+parseFlags SettingsType = parseBitSet [(FLAG_SETTINGS_CLEAR_SETTINGS, 1)]
 
-parseFlags _ = return Set.empty
+parseFlags _ = parseBitSet []
 
-parseBitSet :: Ord a => Int -> [(a, Word32)] -> BG.BitGet (Set a)
-parseBitSet len lst = do
-    flags <- BG.getAsWord32 len
+parseBitSet :: Ord a => [(a, Word8)] -> BG.BitGet (Set a)
+parseBitSet lst = do
+    flags <- BG.getWord8
     let onlySetBits = \(flag, bitValue) -> flags .&. bitValue == bitValue
 	in return $ Set.fromList $ map fst $ filter onlySetBits lst
 
 parse :: BS.ByteString -> Maybe Frame
-parse bs = case G.runGet parseFrame bs of
-	    (Left err, _) -> Nothing
-	    (Right frame, _) -> Just frame 
+parse bs = case BG.runBitGet bs parseFrame of
+	    Left err -> Nothing
+	    Right frame -> Just frame 
 
