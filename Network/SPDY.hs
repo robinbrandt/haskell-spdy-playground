@@ -1,6 +1,7 @@
 module Network.SPDY
     ( parse
-
+    , inflateNvHeaders
+    , headers
     , ControlFrameHeader(ControlFrameHeader)
     , StatusCode (
 	ProtocolError )
@@ -12,7 +13,8 @@ module Network.SPDY
 	, GoAway ) )
     where
 
-
+import Prelude hiding (length)
+import Control.Monad (foldM)
 import qualified Data.ByteString as BS
 import Data.Word as W
 import Data.Set as Set hiding (map, filter)
@@ -22,7 +24,6 @@ import Data.Binary.Strict.Get as G
 import Data.Bits
 import qualified Data.Map as Map
 import qualified Codec.Zlib as Zlib
-import qualified Data.ByteString.UTF8 as SU8
 
 type StreamID = Word32
 
@@ -76,16 +77,18 @@ data ControlFrameType =  SynStreamType
 		| HeadersType
 		| WindowUpdateType
 
+type ParseZlib a = Zlib.Inflate -> IO a
+
 data Frame = SynStream { 
 	      header:: ControlFrameHeader
 	    , priority:: Word8
 	    , streamId:: StreamID
 	    , associatedTo:: Maybe StreamID
-	    , headers:: NvHeaders }
+	    , headers:: BS.ByteString }
 	| SynReply { 
 	      header:: ControlFrameHeader
 	    , streamId:: StreamID
-	    , headers:: NvHeaders }
+	    , headers:: BS.ByteString }
 	| RstStream {
 	      header:: ControlFrameHeader
 	    , streamId:: StreamID
@@ -104,7 +107,7 @@ data Frame = SynStream {
 	| Headers {
 	      header:: ControlFrameHeader
 	    , streamId:: StreamID
-	    , headers:: NvHeaders }
+	    , headers:: BS.ByteString }
 	| WindowUpdate {
 	      header:: ControlFrameHeader
 	    , streamId:: StreamID
@@ -115,20 +118,13 @@ data Frame = SynStream {
 	    , payload:: BS.ByteString }
 	deriving (Show, Eq)
 	      
-parseFrame :: G.Get Frame
+
+parseFrame :: BG.BitGet Frame
 parseFrame = do
-    header <- G.getByteString 16
-    
-    let r = BG.runBitGet header $ do
-	isControl <- BG.getBit
-	if isControl 
-	    then parseControl
-	    else parseData
-
-    case r of
-	Left err -> fail err
-	Right r -> return r
-
+    isControl <- BG.getBit
+    if isControl 
+	then parseControl
+	else parseData
 
 parseControl :: BG.BitGet Frame
 parseControl = do
@@ -147,8 +143,8 @@ parseControlPayload SynStreamType header = do
 	_ <- BG.getBit
 	associatedStreamId <- BG.getAsWord32 31
 	priority <- parsePriority
-	_ <- BG.getAsWord8 5
-	nvHeaders <- parseNvHeaders
+	BG.skip 14
+	nvHeaders <- parseNvHeaders $ length header
 	let associated = if associatedStreamId == 0
 			 then Nothing
 			 else return associatedStreamId
@@ -157,7 +153,7 @@ parseControlPayload SynStreamType header = do
 parseControlPayload SynReplyType header = do
 	_ <- BG.getBit
 	streamId <- BG.getAsWord32 31
-	nvHeaders <- parseNvHeaders
+	nvHeaders <- parseNvHeaders $ length header
 	return $ SynReply header streamId nvHeaders
 
 parseControlPayload RstStreamType header = do
@@ -185,7 +181,7 @@ parseControlPayload GoAwayType header = do
 parseControlPayload HeadersType header = do
 	BG.skip 1
 	lastStreamId <- BG.getAsWord32 31
-	nvHeaders <- parseNvHeaders
+	nvHeaders <- parseNvHeaders $ length header
 	return $ Headers header lastStreamId nvHeaders
 
 parseControlPayload WindowUpdateType header = do
@@ -222,9 +218,23 @@ parseSettingsEntries = do
 		return (UploadBandwidth, flags, val)
     
 
--- | Todo: decompression with 
-parseNvHeaders :: BG.BitGet NvHeaders
-parseNvHeaders = return $ Map.empty
+parseNvHeaders :: Word32 -> BG.BitGet BS.ByteString
+parseNvHeaders len = do
+    bytes <- BG.getLeftByteString $ (fromIntegral len - 10) * 8
+    return bytes
+
+inflateNvHeaders :: Zlib.Inflate -> BS.ByteString -> IO BS.ByteString
+inflateNvHeaders infl bs = do
+    inflate <-  go' infl Prelude.id bs
+    final <- Zlib.finishInflate infl
+    return $ BS.concat $ inflate [final]
+    where
+	go' infl front bs = Zlib.withInflateInput infl bs $ go front
+	go front x = do
+	    y <- x
+	    case y of
+		Nothing -> return front
+		Just z -> go (front . (:) z) x 
     
 
 parsePriority :: BG.BitGet Word8
