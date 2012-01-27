@@ -9,13 +9,15 @@ module Network.SPDY
 	  Ping
 	, Noop
 	, SynStream
+	, SynReply
 	, RstStream
 	, GoAway ) )
     where
 
 import Prelude hiding (length)
-import Control.Monad (foldM)
+import Control.Monad (foldM, replicateM)
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Char8 as BS8
 import Data.Word as W
 import Data.Set as Set hiding (map, filter)
 import Data.Binary as Bin
@@ -144,7 +146,7 @@ parseControlPayload SynStreamType header = do
 	associatedStreamId <- BG.getAsWord32 31
 	priority <- parsePriority
 	BG.skip 14
-	nvHeaders <- parseNvHeaders $ length header
+	nvHeaders <- parseByteString $ length header
 	let associated = if associatedStreamId == 0
 			 then Nothing
 			 else return associatedStreamId
@@ -153,7 +155,8 @@ parseControlPayload SynStreamType header = do
 parseControlPayload SynReplyType header = do
 	_ <- BG.getBit
 	streamId <- BG.getAsWord32 31
-	nvHeaders <- parseNvHeaders $ length header
+	BG.skip 16
+	nvHeaders <- parseByteString $ length header
 	return $ SynReply header streamId nvHeaders
 
 parseControlPayload RstStreamType header = do
@@ -181,7 +184,7 @@ parseControlPayload GoAwayType header = do
 parseControlPayload HeadersType header = do
 	BG.skip 1
 	lastStreamId <- BG.getAsWord32 31
-	nvHeaders <- parseNvHeaders $ length header
+	nvHeaders <- parseByteString $ length header
 	return $ Headers header lastStreamId nvHeaders
 
 parseControlPayload WindowUpdateType header = do
@@ -218,16 +221,19 @@ parseSettingsEntries = do
 		return (UploadBandwidth, flags, val)
     
 
-parseNvHeaders :: Word32 -> BG.BitGet BS.ByteString
-parseNvHeaders len = do
+parseByteString :: Word32 -> BG.BitGet BS.ByteString
+parseByteString len = do
     bytes <- BG.getLeftByteString $ (fromIntegral len - 10) * 8
     return bytes
 
-inflateNvHeaders :: Zlib.Inflate -> BS.ByteString -> IO BS.ByteString
+inflateNvHeaders :: Zlib.Inflate -> BS.ByteString -> IO NvHeaders
 inflateNvHeaders infl bs = do
     inflate <-  go' infl Prelude.id bs
     final <- Zlib.finishInflate infl
-    return $ BS.concat $ inflate [final]
+    let inflated = BS.concat $ inflate [final] in
+	case runBitGet inflated parseNvHeader of
+	    Left err -> fail err
+	    Right headers -> return headers
     where
 	go' infl front bs = Zlib.withInflateInput infl bs $ go front
 	go front x = do
@@ -235,7 +241,23 @@ inflateNvHeaders infl bs = do
 	    case y of
 		Nothing -> return front
 		Just z -> go (front . (:) z) x 
-    
+
+parseNvHeader :: BG.BitGet NvHeaders
+parseNvHeader = do
+    numPairs <- BG.getWord16be
+    nvPairs <- replicateM (fromIntegral numPairs) parsePairs
+    return $ Map.fromList nvPairs
+    where
+	parsePairs = do
+	    nameLen <- BG.getWord16be
+	    name <- getString $ fromIntegral nameLen
+	    valueLen <- BG.getWord16be
+	    value <- getString $ fromIntegral valueLen
+	    return (name, value)
+	getString len = do
+	    bs <- getLeftByteString (len * 8)
+	    str <- return $ BS8.unpack bs
+	    return str
 
 parsePriority :: BG.BitGet Word8
 parsePriority = BG.getAsWord8 2 

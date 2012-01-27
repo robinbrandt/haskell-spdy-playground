@@ -19,6 +19,7 @@ tests = [testGroup "FrameParsing" [
 	      testCase "Noop" testNoop
 	    , testCase "Ping" testPing
 	    , testCase "SynStream" testSynStream
+	    , testCase "SynReply" testSynReply
 	    , testCase "RstStream" testRstStream
 	    , testCase "GoAway" testGoAway
 	    , testCase "SynStreamHeaders" testSynStreamHeaders]]
@@ -96,8 +97,10 @@ testSynStreamHeaders = do
 	raw <- SP.inflateNvHeaders infl $ SP.headers frame
 	return raw
 
-    unsafePerformIO decodedHeaders @?= bs
+    unsafePerformIO decodedHeaders @?= headers
     where
+	headers = Map.fromList  [("host", "localhost")
+				,("custom", "1")]
 	bs = BS.pack $ [ 128, 2, 0, 1,
 		       0, 0, 0, 46, 
 		       0x00, 0x00, 0x00, 0x01, -- Stream ID
@@ -108,4 +111,19 @@ testSynStreamHeaders = do
 		       0x6c, 0xc9, 0xa5, 0xc5, 0x25, 0xf9, 0xb9,
                        0x0c, 0x8c, 0x86, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff]
 	frame = fromJust $ SP.parse bs
+
+testSynReply = do
+    assertEqual "" (Just fr) (SP.parse bs)
+    where
+	headers = [0x78, 0xbb, 0xdf, 0xa2, 0x51, 0xb2, -- Deflated Name/Value pairs
+		   0x62, 0x60, 0x62, 0x60, 0x01, 0xe5, 0x12,
+		   0x06, 0x4e, 0x50, 0x50, 0xe6, 0x80, 0x99,
+		   0x6c, 0xc9, 0xa5, 0xc5, 0x25, 0xf9, 0xb9,
+		   0x0c, 0x8c, 0x86, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff]
+	fr = SynReply (ControlFrameHeader 2 Set.empty 46) 1 (BS.pack headers)
+	bs = BS.pack $ [128, 2, 0, 2,
+		        0, 0, 0, 46, 
+			0x00, 0x00, 0x00, 0x01, -- Stream ID
+			0x00, 0x00] ++ headers
+			
 	
