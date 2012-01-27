@@ -91,16 +91,20 @@ initInflate = inflate
 		\ation/xhtmltext/plainpublicmax-agecharset=iso-8859-1utf-8gzipdeflateHTTP/1\
 		\.1statusversionurl\0"
 
-testSynStreamHeaders = do
+assertHeadersEqual :: BS.ByteString -> NvHeaders -> Assertion
+assertHeadersEqual bs headers = do
     let decodedHeaders = do
 	infl <- initInflate
-	raw <- SP.inflateNvHeaders infl $ SP.headers frame
-	return raw
-
+	SP.inflateNvHeaders infl bs
+    
     unsafePerformIO decodedHeaders @?= headers
+
+demoHeaders = Map.fromList  [("host", "localhost")
+	         	    ,("custom", "1")]
+
+testSynStreamHeaders = do
+    assertHeadersEqual (SP.headers frame) demoHeaders
     where
-	headers = Map.fromList  [("host", "localhost")
-				,("custom", "1")]
 	bs = BS.pack $ [ 128, 2, 0, 1,
 		       0, 0, 0, 46, 
 		       0x00, 0x00, 0x00, 0x01, -- Stream ID
@@ -113,8 +117,11 @@ testSynStreamHeaders = do
 	frame = fromJust $ SP.parse bs
 
 testSynReply = do
-    assertEqual "" (Just fr) (SP.parse bs)
+    assertEqual "" fr frame
+    assertHeadersEqual (SP.headers frame) demoHeaders
+
     where
+	frame = fromJust $ SP.parse bs
 	headers = [0x78, 0xbb, 0xdf, 0xa2, 0x51, 0xb2, -- Deflated Name/Value pairs
 		   0x62, 0x60, 0x62, 0x60, 0x01, 0xe5, 0x12,
 		   0x06, 0x4e, 0x50, 0x50, 0xe6, 0x80, 0x99,

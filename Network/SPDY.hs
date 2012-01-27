@@ -3,6 +3,7 @@ module Network.SPDY
     , inflateNvHeaders
     , headers
     , ControlFrameHeader(ControlFrameHeader)
+    , NvHeaders
     , StatusCode (
 	ProtocolError )
     , Frame(
