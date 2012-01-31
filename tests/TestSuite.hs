@@ -22,7 +22,9 @@ tests = [testGroup "FrameParsing" [
 	    , testCase "SynReply" testSynReply
 	    , testCase "RstStream" testRstStream
 	    , testCase "GoAway" testGoAway
-	    , testCase "SynStreamHeaders" testSynStreamHeaders]]
+	    , testCase "Headers" testHeaders
+	    , testCase "SynStreamHeaders" testSynStreamHeaders
+	    , testCase "Data" testData]]
 
 testParseFrame :: BS.ByteString -> SP.Frame -> Assertion
 testParseFrame bs frame = Just frame @?= SP.parse bs
@@ -32,6 +34,19 @@ testNoop = testParseFrame bs fr
 	bs = (BS.pack [128, 2, 0, 5, 0, 0, 0, 0]) 
 	fr = Noop (ControlFrameHeader 2 Set.empty 0)
 
+testHeaders = testParseFrame bs fr
+    where
+	fr = Headers (ControlFrameHeader 2 Set.empty 46) 1 headers
+	rawHeaders = [ 0x78, 0xbb, 0xdf, 0xa2, 0x51, 0xb2, --Deflated Name/Value pairs
+                       0x62, 0x60, 0x62, 0x60, 0x01, 0xe5, 0x12,
+		       0x06, 0x4e, 0x50, 0x50, 0xe6, 0x80, 0x99,
+		       0x6c, 0xc9, 0xa5, 0xc5, 0x25, 0xf9, 0xb9,
+                       0x0c, 0x8c, 0x86, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff]
+	headers = BS.pack rawHeaders
+	bs = BS.pack $ [ 128, 2, 0, 8,
+		       0, 0, 0, 46, 
+		       0x00, 0x00, 0x00, 0x01, -- Stream ID
+		       0x00, 0x00  ] ++ rawHeaders -- Priority + Unused
 
 testPing = testParseFrame bs fr
     where
@@ -57,6 +72,13 @@ testGoAway = testParseFrame bs fr
 		       0, 0, 0, 4, 
 		       0x00, 0x00, 0x00, 42 -- Stream ID
 		     ]
+
+testData = testParseFrame bs fr
+    where
+	fr = Data 1 (Set.fromList [FLAG_FIN]) (BS.pack rawData)
+	rawData = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+	bs = BS.pack $ [ 0, 0, 0, 1
+		       , 1, 0, 0, 10] ++ rawData
 
 testSynStream = testParseFrame bs fr
     where

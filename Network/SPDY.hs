@@ -1,5 +1,6 @@
 module Network.SPDY
     ( parse
+    , Flag(FLAG_FIN)
     , inflateNvHeaders
     , headers
     , ControlFrameHeader(ControlFrameHeader)
@@ -12,7 +13,9 @@ module Network.SPDY
 	, SynStream
 	, SynReply
 	, RstStream
-	, GoAway ) )
+	, Headers
+	, GoAway
+	, Data ) )
     where
 
 import Prelude hiding (length)
@@ -147,7 +150,7 @@ parseControlPayload SynStreamType header = do
 	associatedStreamId <- BG.getAsWord32 31
 	priority <- parsePriority
 	BG.skip 14
-	nvHeaders <- parseByteString $ length header
+	nvHeaders <- parseByteString $ (length header - 10)
 	let associated = if associatedStreamId == 0
 			 then Nothing
 			 else return associatedStreamId
@@ -157,7 +160,7 @@ parseControlPayload SynReplyType header = do
 	_ <- BG.getBit
 	streamId <- BG.getAsWord32 31
 	BG.skip 16
-	nvHeaders <- parseByteString $ length header
+	nvHeaders <- parseByteString $ (length header - 10)
 	return $ SynReply header streamId nvHeaders
 
 parseControlPayload RstStreamType header = do
@@ -184,9 +187,10 @@ parseControlPayload GoAwayType header = do
 
 parseControlPayload HeadersType header = do
 	BG.skip 1
-	lastStreamId <- BG.getAsWord32 31
-	nvHeaders <- parseByteString $ length header
-	return $ Headers header lastStreamId nvHeaders
+	streamId <- BG.getAsWord32 31
+	BG.skip 16
+	nvHeaders <- parseByteString $ (length header - 10)
+	return $ Headers header streamId nvHeaders
 
 parseControlPayload WindowUpdateType header = do
 	BG.skip 1
@@ -224,7 +228,7 @@ parseSettingsEntries = do
 
 parseByteString :: Word32 -> BG.BitGet BS.ByteString
 parseByteString len = do
-    bytes <- BG.getLeftByteString $ (fromIntegral len - 10) * 8
+    bytes <- BG.getLeftByteString $ (fromIntegral len) * 8
     return bytes
 
 inflateNvHeaders :: Zlib.Inflate -> BS.ByteString -> IO NvHeaders
@@ -265,7 +269,11 @@ parsePriority = BG.getAsWord8 2
 
 parseData :: BG.BitGet Frame
 parseData = do
-    return $ Data 0 Set.empty BS.empty
+    streamId <- BG.getAsWord32 31
+    flags <- parseBitSet [(FLAG_FIN, 1)]
+    len <- BG.getAsWord32 24
+    bs <- parseByteString len
+    return $ Data streamId flags bs
 
 parseControlFrameType :: BG.BitGet ControlFrameType
 parseControlFrameType = do
