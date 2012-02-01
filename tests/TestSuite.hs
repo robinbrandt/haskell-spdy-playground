@@ -25,7 +25,8 @@ tests = [testGroup "FrameParsing" [
 	    , testCase "Headers" testHeaders
 	    , testCase "SynStreamHeaders" testSynStreamHeaders
 	    , testCase "Data" testData]
-        ,testGroup "FrameSerialization" [
+	, testGroup "Serialization <-> Deserialization" testSerializeDeserializeAll
+        , testGroup "FrameSerialization" [
 	    testCase "Data" testDataPut
 	]]
 
@@ -98,23 +99,6 @@ testSynStream = testParseFrame bs fr
 		       0x00, 0x00, 0x00, 0x00, -- Associated Stream ID
 		       0x00, 0x00  ] ++ rawHeaders -- Priority + Unused
 		       
-initInflate :: IO Zlib.Inflate
-initInflate = inflate
-    where
-	inflate = Zlib.initInflateWithDictionary (Zlib.WindowBits 15) dict
-	dict = SU8.fromString "optionsgetheadpostputdeletetraceacceptaccept-charsetaccept-encodingaccept-\
-                \languageauthorizationexpectfromhostif-modified-sinceif-matchif-none-matchi\
-		\f-rangeif-unmodifiedsincemax-forwardsproxy-authorizationrangerefererteuser\
-		\-agent10010120020120220320420520630030130230330430530630740040140240340440\
-		\5406407408409410411412413414415416417500501502503504505accept-rangesageeta\
-		\glocationproxy-authenticatepublicretry-afterservervarywarningwww-authentic\
-		\ateallowcontent-basecontent-encodingcache-controlconnectiondatetrailertran\
-		\sfer-encodingupgradeviawarningcontent-languagecontent-lengthcontent-locati\
-		\oncontent-md5content-rangecontent-typeetagexpireslast-modifiedset-cookieMo\
-		\ndayTuesdayWednesdayThursdayFridaySaturdaySundayJanFebMarAprMayJunJulAugSe\
-		\pOctNovDecchunkedtext/htmlimage/pngimage/jpgimage/gifapplication/xmlapplic\
-		\ation/xhtmltext/plainpublicmax-agecharset=iso-8859-1utf-8gzipdeflateHTTP/1\
-		\.1statusversionurl\0"
 
 assertHeadersEqual :: BS.ByteString -> NvHeaders -> Assertion
 assertHeadersEqual bs headers = do
@@ -164,4 +148,36 @@ testDataPut = (SP.serialize fr) @?= bs
 	payload = [1, 2, 3, 4]
 	bs = BS.pack $ [0, 0, 0, 42,
 		        1, 0, 0, 4] ++ payload
-	fr = Data 42 (Set.fromList []) (BS.pack payload)
+	fr = Data 42 (Set.fromList [FLAG_FIN]) (BS.pack payload)
+
+testSerializeDeserializeAll =
+    map makeTestCase frames
+    where
+	makeTestCase = \frame -> testCase (show frame) (testSerializeDeserialize frame)
+	payload = BS.pack [1, 2, 3, 4]
+	headers = BS.pack [1, 2, 3, 4]
+	controlHeader = (ControlFrameHeader 2 Set.empty 14)
+	frames = [ Data 42 (Set.fromList []) payload
+		 , SynStream controlHeader 1 42 Nothing headers 
+		 ]
+ 
+testSerializeDeserialize :: Frame -> Assertion
+testSerializeDeserialize fr = (parse $ SP.serialize fr) @?= Just fr
+
+initInflate :: IO Zlib.Inflate
+initInflate = inflate
+    where
+	inflate = Zlib.initInflateWithDictionary (Zlib.WindowBits 15) dict
+	dict = SU8.fromString "optionsgetheadpostputdeletetraceacceptaccept-charsetaccept-encodingaccept-\
+                \languageauthorizationexpectfromhostif-modified-sinceif-matchif-none-matchi\
+		\f-rangeif-unmodifiedsincemax-forwardsproxy-authorizationrangerefererteuser\
+		\-agent10010120020120220320420520630030130230330430530630740040140240340440\
+		\5406407408409410411412413414415416417500501502503504505accept-rangesageeta\
+		\glocationproxy-authenticatepublicretry-afterservervarywarningwww-authentic\
+		\ateallowcontent-basecontent-encodingcache-controlconnectiondatetrailertran\
+		\sfer-encodingupgradeviawarningcontent-languagecontent-lengthcontent-locati\
+		\oncontent-md5content-rangecontent-typeetagexpireslast-modifiedset-cookieMo\
+		\ndayTuesdayWednesdayThursdayFridaySaturdaySundayJanFebMarAprMayJunJulAugSe\
+		\pOctNovDecchunkedtext/htmlimage/pngimage/jpgimage/gifapplication/xmlapplic\
+		\ation/xhtmltext/plainpublicmax-agecharset=iso-8859-1utf-8gzipdeflateHTTP/1\
+		\.1statusversionurl\0"

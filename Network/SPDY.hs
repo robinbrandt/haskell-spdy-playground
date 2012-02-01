@@ -21,6 +21,7 @@ import Data.Binary.Strict.BitGet as BG
 import Data.Binary.BitPut as BP
 import Data.Binary.Strict.Get as G
 import Data.Bits
+import Data.Tuple
 import qualified Data.Map as Map
 import qualified Codec.Zlib as Zlib
 
@@ -302,6 +303,10 @@ parse bs = case BG.runBitGet bs parseFrame of
 	    Left err -> Nothing
 	    Right frame -> Just frame 
 
+-- | Serialization 
+--
+--
+
 serialize :: Frame -> BS.ByteString
 serialize fr = BS.concat $ BL.toChunks lbs
     where
@@ -315,13 +320,57 @@ putFrame (Data streamId flags payload) = do
     BP.putNBits 24 (BS.length payload)
     putPayload payload
 
+putFrame (SynStream controlHeaders prio streamId associatedStreamID headers) = do
+    putControlHeader [ (FLAG_FIN, 1)
+		     , (FLAG_UNIDIRECTIONAL, 2)]
+		     1
+		     controlHeaders
+    BP.putBit False
+    putStreamId streamId
+    BP.putBit False
+    putOptionalStreamId associatedStreamID
+    putPrio prio
+    BP.putNBits 14 $ (0 :: Word8)
+    BP.putByteString headers 
+
 putFrame _ = fail "not implemented yet"
+
+putOptionalStreamId optId =
+    case optId of
+	Just s -> BP.putNBits 31 (s :: Word32)
+	Nothing -> BP.putNBits 31 (0 :: Word8)
+
+putPrio :: Word8 -> BP.BitPut
+putPrio = putNBits 2
+
+putControlHeader flagList frameType (ControlFrameHeader version flags length) = do
+    BP.putBit True
+    BP.putNBits 15 (version :: Word16)
+    BP.putNBits 16 (frameType :: Word16)
+    putBitSet flagList flags
+    BP.putNBits 24 length
+
 
 putStreamId :: StreamID -> BP.BitPut
 putStreamId id = BP.putNBits 31 id
 
 putFlags :: Flags -> BP.BitPut
-putFlags flags = BP.putNBits 8 (1 :: Word)
+putFlags = putBitSet [(FLAG_FIN, 1)]
+
+putBitSet :: Ord a => [(a, Word8)] -> Set a -> BP.BitPut
+putBitSet lst flags = do
+    BP.putNBits 8 flagsAsVal
+    where
+	flagsAsVal = Set.fold (setBits' lst) 0 flags
+
+setBits' :: Ord a => [(a, Word8)] -> a -> Word8 -> Word8
+setBits' lst val acc = acc .|. (bitValue val)
+    where
+	bitValue = \val -> case Map.lookup val lookupTable of
+				Nothing -> 0
+				Just val -> val
+	lookupTable = Map.fromList lst
+	
 
 putPayload :: BS.ByteString -> BP.BitPut
 putPayload bs =
