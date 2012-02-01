@@ -1,31 +1,24 @@
 module Network.SPDY
     ( parse
-    , Flag(FLAG_FIN)
+    , serialize
+    , Flag(..)
     , inflateNvHeaders
-    , headers
-    , ControlFrameHeader(ControlFrameHeader)
+    , ControlFrameHeader(..)
     , NvHeaders
-    , StatusCode (
-	ProtocolError )
-    , Frame(
-	  Ping
-	, Noop
-	, SynStream
-	, SynReply
-	, RstStream
-	, Headers
-	, GoAway
-	, Data ) )
+    , StatusCode (..)
+    , Frame(..) )
     where
 
 import Prelude hiding (length)
 import Control.Monad (foldM, replicateM)
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Char8 as BS8
 import Data.Word as W
 import Data.Set as Set hiding (map, filter)
 import Data.Binary as Bin
 import Data.Binary.Strict.BitGet as BG
+import Data.Binary.BitPut as BP
 import Data.Binary.Strict.Get as G
 import Data.Bits
 import qualified Data.Map as Map
@@ -308,4 +301,29 @@ parse :: BS.ByteString -> Maybe Frame
 parse bs = case BG.runBitGet bs parseFrame of
 	    Left err -> Nothing
 	    Right frame -> Just frame 
+
+serialize :: Frame -> BS.ByteString
+serialize fr = BS.concat $ BL.toChunks lbs
+    where
+	lbs = BP.runBitPut $ putFrame fr
+
+putFrame :: Frame -> BP.BitPut
+putFrame (Data streamId flags payload) = do
+    BP.putBit False
+    putStreamId streamId
+    putFlags flags
+    BP.putNBits 24 (BS.length payload)
+    putPayload payload
+
+putFrame _ = fail "not implemented yet"
+
+putStreamId :: StreamID -> BP.BitPut
+putStreamId id = BP.putNBits 31 id
+
+putFlags :: Flags -> BP.BitPut
+putFlags flags = BP.putNBits 8 (1 :: Word)
+
+putPayload :: BS.ByteString -> BP.BitPut
+putPayload bs =
+    BP.putByteString bs
 

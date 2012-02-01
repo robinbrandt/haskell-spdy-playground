@@ -24,7 +24,10 @@ tests = [testGroup "FrameParsing" [
 	    , testCase "GoAway" testGoAway
 	    , testCase "Headers" testHeaders
 	    , testCase "SynStreamHeaders" testSynStreamHeaders
-	    , testCase "Data" testData]]
+	    , testCase "Data" testData]
+        ,testGroup "FrameSerialization" [
+	    testCase "Data" testDataPut
+	]]
 
 testParseFrame :: BS.ByteString -> SP.Frame -> Assertion
 testParseFrame bs frame = Just frame @?= SP.parse bs
@@ -156,3 +159,9 @@ testSynReply = do
 			0x00, 0x00] ++ headers
 			
 	
+testDataPut = (SP.serialize fr) @?= bs
+    where
+	payload = [1, 2, 3, 4]
+	bs = BS.pack $ [0, 0, 0, 42,
+		        1, 0, 0, 4] ++ payload
+	fr = Data 42 (Set.fromList []) (BS.pack payload)
