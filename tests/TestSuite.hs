@@ -159,6 +159,10 @@ testSerializeDeserializeAll =
 	controlHeader = (ControlFrameHeader 2 Set.empty 14)
 	frames = [ Data 42 (Set.fromList []) payload
 		 , SynStream controlHeader 1 42 Nothing headers 
+		 , SynReply controlHeader 1 headers
+		 , GoAway controlHeader 1
+		 , RstStream controlHeader 1 ProtocolError
+		 , Noop controlHeader
 		 ]
  
 testSerializeDeserialize :: Frame -> Assertion

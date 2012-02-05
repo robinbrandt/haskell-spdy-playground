@@ -330,8 +330,43 @@ putFrame (SynStream controlHeaders prio streamId associatedStreamID headers) = d
     BP.putBit False
     putOptionalStreamId associatedStreamID
     putPrio prio
-    BP.putNBits 14 $ (0 :: Word8)
+    BP.putNBits 14 (0 :: Word8)
     BP.putByteString headers 
+
+putFrame (SynReply controlHeaders streamId headers) = do
+    putControlHeader [ (FLAG_FIN, 1) ] 2 controlHeaders
+    BP.putBit False
+    putStreamId streamId
+    BP.putNBits 16 (0 :: Word8)
+    BP.putByteString headers
+
+putFrame (GoAway controlHeaders lastGoodId) = do
+    putControlHeader [] 7 controlHeaders
+    BP.putBit False
+    putStreamId lastGoodId
+
+putFrame (RstStream controlHeaders streamId status) = do
+    putControlHeader [] 3 controlHeaders
+    BP.putBit False
+    putStreamId streamId
+    BP.putNBits 32 (errorVal :: Word8)
+    where
+	errorVal = case status of
+	    ProtocolError -> 1
+	    InvalidStream -> 2
+	    RefusedStream -> 3
+	    UnsupportedVersion -> 4
+	    Cancel -> 5
+	    FlowControlError -> 6
+	    StreamInUse -> 7
+	    StreamAlreadyClosed -> 8
+
+putFrame (Noop controlHeaders) = do
+    putControlHeader [] 5 controlHeaders
+
+putFrame (Ping controlHeaders id) = do
+    putControlHeader [] 6 controlHeaders
+    putNBits 32 (id :: Word32)
 
 putFrame _ = fail "not implemented yet"
 
