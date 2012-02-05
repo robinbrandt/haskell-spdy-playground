@@ -3,7 +3,7 @@ import Test.Framework.Providers.HUnit
 import Test.HUnit
 
 import qualified Data.ByteString as BS
-import Network.SPDY as SP
+import Network.SPDY.Frame as SP
 import Data.List
 import Data.Maybe
 import qualified Data.ByteString.UTF8 as SU8
