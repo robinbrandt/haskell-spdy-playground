@@ -1,6 +1,7 @@
 module Network.SPDY.Frame
     ( parse
     , serialize
+    , emptyFlags
     , Flag(..)
     , inflateNvHeaders
     , ControlFrameHeader(..)
@@ -33,6 +34,8 @@ data Flag = FLAG_FIN
 	deriving (Show, Ord, Eq)
 
 type Flags = Set Flag
+
+emptyFlags = Set.empty
 
 type NvHeaders = Map.Map String String
 
@@ -240,6 +243,10 @@ inflateNvHeaders infl bs = do
 	    case y of
 		Nothing -> return front
 		Just z -> go (front . (:) z) x 
+
+--deflateNvHeaders :: Zlib.Deflate -> NvHeaders -> IO BS.ByteString
+--deflateNvHeaders defl headers = do
+    
 
 parseNvHeader :: BG.BitGet NvHeaders
 parseNvHeader = do
