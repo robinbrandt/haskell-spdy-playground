@@ -4,6 +4,7 @@ module Network.SPDY.Frame
     , emptyFlags
     , Flag(..)
     , inflateNvHeaders
+    , deflateNvHeaders
     , ControlFrameHeader(..)
     , NvHeaders
     , StatusCode (..)
@@ -11,7 +12,7 @@ module Network.SPDY.Frame
     where
 
 import Prelude hiding (length)
-import Control.Monad (foldM, replicateM)
+import Control.Monad (foldM, replicateM, sequence_)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Char8 as BS8
@@ -23,6 +24,7 @@ import Data.Binary.BitPut as BP
 import Data.Binary.Strict.Get as G
 import Data.Bits
 import Data.Tuple
+import qualified Data.List as List
 import qualified Data.Map as Map
 import qualified Codec.Zlib as Zlib
 
@@ -244,8 +246,22 @@ inflateNvHeaders infl bs = do
 		Nothing -> return front
 		Just z -> go (front . (:) z) x 
 
---deflateNvHeaders :: Zlib.Deflate -> NvHeaders -> IO BS.ByteString
---deflateNvHeaders defl headers = do
+deflateNvHeaders :: Zlib.Deflate -> NvHeaders -> IO BS.ByteString
+deflateNvHeaders defl headers = do
+    let lbs = runBitPut $ putNvHeaders headers in do
+	deflated <- foldM (go' defl) Prelude.id $ BL.toChunks lbs
+	deflated' <- Zlib.finishDeflate defl $ go deflated
+	deflatedBs <- return $ BL.fromChunks $ deflated' []
+    
+	return $ toStrict $ runBitPut $ putByteString $ toStrict deflatedBs
+  where
+	toStrict = BS.concat . BL.toChunks
+	go' defl front bs = Zlib.withDeflateInput defl bs $ go front
+	go front x = do
+	    y <- x
+	    case y of
+		Nothing -> return front
+		Just z -> go (front . (:) z) x
     
 
 parseNvHeader :: BG.BitGet NvHeaders
@@ -417,4 +433,17 @@ setBits' lst val acc = acc .|. (bitValue val)
 putPayload :: BS.ByteString -> BP.BitPut
 putPayload bs =
     BP.putByteString bs
+
+putNvHeaders :: NvHeaders -> BP.BitPut
+putNvHeaders headers = do
+    BP.putNBits 16 $ Map.size headers
+    sequence_ $ map putEntries $ Map.toList headers
+    where
+	putEntries :: (String, String) -> BP.BitPut
+	putEntries (k, v) = do
+	    BP.putNBits 16 (List.length k)
+	    BP.putByteString $ BS8.pack k
+	    BP.putNBits 16 (List.length v)
+	    BP.putByteString $ BS8.pack v
+    
 

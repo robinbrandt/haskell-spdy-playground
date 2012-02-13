@@ -1,8 +1,12 @@
 module Network.SPDY
+    ( initInflate
+    , initDeflate )
     where
 
 import Data.ByteString as BS hiding (head) 
+import Data.ByteString.Char8 as BS8 hiding (head) 
 import Data.Set as Set
+import Data.Map as Map
 import Control.Concurrent
 import Control.Concurrent.MVar
 import Control.Monad
@@ -15,10 +19,13 @@ import qualified Data.ByteString.UTF8 as SU8
 import Network.SPDY.Frame as SP
 import qualified Codec.Zlib as Zlib
 
+port = "1115"
+
 serveSpdy :: IO ()
 serveSpdy = withSocketsDo $
     do
-	addrinfos <- getAddrInfo (Just (defaultHints {addrFlags = [AI_PASSIVE]})) Nothing (Just "1111")
+	print $ "Serving spdy on port " ++ port
+	addrinfos <- getAddrInfo (Just (defaultHints {addrFlags = [AI_PASSIVE]})) Nothing (Just port)
 	let serveraddr = head addrinfos
 
 	sock <- socket (addrFamily serveraddr) Stream defaultProtocol
@@ -40,16 +47,19 @@ serveSpdy = withSocketsDo $
 
 
 data SpdyConnectionState = SpdyConnectionState {
-		zlibInflate :: Zlib.Inflate }	
+		zlibInflate :: Zlib.Inflate 
+	      , zlibDeflate :: Zlib.Deflate }	
 
-data SpdyFrameResponse = SendFrame {
-			  frame :: SP.Frame }
+data SpdyFrameResponse = SendFrames {
+			  frames :: [SP.Frame] }
+		       | Ignore
 		       | Close
 
 initState :: IO SpdyConnectionState
 initState = do
     inflate <- initInflate
-    return $ SpdyConnectionState inflate
+    deflate <- initDeflate
+    return $ SpdyConnectionState inflate deflate
 
 procMessage lock connsock clientaddr = do
     state <- initState
@@ -58,10 +68,13 @@ procMessage lock connsock clientaddr = do
 	recvdata <- readMessage connsock 1024
 	resp <- handleData state recvdata
 	case resp of
-	    SendFrame fr -> do
-				print $ "--> sending " ++ (show fr)
-				void $ send connsock $ SP.serialize fr
+	    SendFrames frames -> do
+				print $ "--> sending " ++ (show frames)
+				mapM_ (\fr -> send connsock $ SP.serialize fr) frames
 				loop
+	    Ignore -> do
+			print "Ignoring..."
+			loop
 	    Close -> sClose connsock
     loop
 
@@ -77,7 +90,7 @@ procMessage lock connsock clientaddr = do
 handleData :: SpdyConnectionState -> ByteString -> IO SpdyFrameResponse
 handleData state bs = do
     case SP.parse bs of
-	Nothing -> fail "cannot decode"
+	Nothing -> fail $ "cannot decode " ++ (show $ BS.length bs)
 	Just frame -> do
 	    print frame
 	    handleFrame frame state
@@ -85,25 +98,30 @@ handleData state bs = do
 handleFrame :: SP.Frame -> SpdyConnectionState -> IO SpdyFrameResponse
 handleFrame fr@(SynStream header prio id assoc headers) state = do
     hd <- SP.inflateNvHeaders (zlibInflate state) headers
+    compressedHeaders <- SP.deflateNvHeaders (zlibDeflate state) newHeaders
+    
     print hd
-    return $ SendFrame synReply
+    return $ SendFrames [ synReply compressedHeaders
+			, dataReply "<html><body>Hello World</body></html>" ]
     where
-	synReply = SynReply frHeader id hdrs
-	frHeader = ControlFrameHeader  2 (Set.fromList []) 8
-	hdrs = BS.empty
+	synReply compressedHeaders = SynReply (frHeader compressedHeaders) id compressedHeaders
+	newHeaders = Map.fromList [("status", "200 OK")
+				  ,("version", "HTTP/1.1") ]
+	frHeader compressedHeaders = ControlFrameHeader  2 (Set.fromList []) $ headerLength compressedHeaders
+	headerLength compressedHeaders = 6 + (fromIntegral $ BS.length compressedHeaders)
+
+	dataReply payload = Data id (Set.fromList [FLAG_FIN]) $ BS8.pack payload
+
 
 handleFrame fr@(Ping frHeader id) state = do
-    return $ SendFrame fr
+    return $ SendFrames [fr]
+    --return Ignore
 
 handleFrame fr _ = do
     print fr
-    return Close
+    return Ignore
 
-initInflate :: IO Zlib.Inflate
-initInflate = inflate
-    where
-	inflate = Zlib.initInflateWithDictionary (Zlib.WindowBits 15) dict
-	dict = SU8.fromString "optionsgetheadpostputdeletetraceacceptaccept-charsetaccept-encodingaccept-\
+zlibDictionary = SU8.fromString "optionsgetheadpostputdeletetraceacceptaccept-charsetaccept-encodingaccept-\
                 \languageauthorizationexpectfromhostif-modified-sinceif-matchif-none-matchi\
 		\f-rangeif-unmodifiedsincemax-forwardsproxy-authorizationrangerefererteuser\
 		\-agent10010120020120220320420520630030130230330430530630740040140240340440\
@@ -116,6 +134,13 @@ initInflate = inflate
 		\pOctNovDecchunkedtext/htmlimage/pngimage/jpgimage/gifapplication/xmlapplic\
 		\ation/xhtmltext/plainpublicmax-agecharset=iso-8859-1utf-8gzipdeflateHTTP/1\
 		\.1statusversionurl\0"
+
+initDeflate :: IO Zlib.Deflate
+initDeflate = Zlib.initDeflateWithDictionary 7 zlibDictionary (Zlib.WindowBits 15) 
+	
+
+initInflate :: IO Zlib.Inflate
+initInflate = Zlib.initInflateWithDictionary (Zlib.WindowBits 15) zlibDictionary
 
 	    
 main = serveSpdy
