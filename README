@@ -1,0 +1,7 @@
+README
+======
+
+- startup chrome with new profile and disabled ssl for SPDY
+
+/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --use-spdy=no-ssl --user-data-dir=/tmp/spdy
+
