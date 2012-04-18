@@ -1,12 +1,15 @@
 module Network.SPDY
     ( initInflate
-    , initDeflate )
+    , initDeflate
+    , main)
     where
 
 import Data.ByteString as BS hiding (head) 
 import Data.ByteString.Char8 as BS8 hiding (head) 
 import Data.Set as Set
 import Data.Map as Map
+import Debug.Trace
+import Codec.Zlib (defaultWindowBits)
 import Control.Concurrent
 import Control.Concurrent.MVar
 import Control.Monad
@@ -66,11 +69,12 @@ procMessage lock connsock clientaddr = do
 
     let loop = do
 	recvdata <- readMessage connsock 1024
+	putTraceMsg ("received " ++ (show $ BS8.length recvdata ) ++ " bytes")
 	resp <- handleData state recvdata
 	case resp of
 	    SendFrames frames -> do
-				print $ "--> sending " ++ (show frames)
-				mapM_ (\fr -> send connsock $ SP.serialize fr) frames
+				putTraceMsg $ "--> sending " ++ (show frames)
+				mapM_ (\fr -> sendData connsock fr) frames
 				loop
 	    Ignore -> do
 			print "Ignoring..."
@@ -79,11 +83,18 @@ procMessage lock connsock clientaddr = do
     loop
 
     where
+	sendData connsock frame = do
+	    putTraceMsg ("sending " ++ (show $ BS8.length raw) ++ " bytes")
+	    send connsock raw
+	    where
+		raw = SP.serialize frame
+	    
 	readMessage connsock buflen = do
 	    part <- recv connsock buflen
-	    if (BS.length part) < buflen then
+	    if (BS.length part) < buflen
+	     then
 		return part
-	    else do
+	     else do
 		rest <- readMessage connsock buflen
 		return $ part `append` rest
 
@@ -94,27 +105,33 @@ handleData state bs = do
 	Just frame -> do
 	    print frame
 	    handleFrame frame state
+
+dataReply id payload = Data id (Set.fromList [FLAG_FIN]) $ BS8.pack payload
+    
     
 handleFrame :: SP.Frame -> SpdyConnectionState -> IO SpdyFrameResponse
 handleFrame fr@(SynStream header prio id assoc headers) state = do
     hd <- SP.inflateNvHeaders (zlibInflate state) headers
     compressedHeaders <- SP.deflateNvHeaders (zlibDeflate state) newHeaders
     
-    print hd
+    putTraceMsg $ "request headers: " ++ (show hd)
     return $ SendFrames [ synReply compressedHeaders
-			, dataReply "<html><body>Hello World</body></html>" ]
+			, dataReply id "<html><body>Hello World</body></html>"]
     where
 	synReply compressedHeaders = SynReply (frHeader compressedHeaders) id compressedHeaders
-	newHeaders = Map.fromList [("status", "200 OK")
-				  ,("version", "HTTP/1.1") ]
+	newHeaders = Map.fromList [("status","200 OK")
+				  ,("version", "HTTP/1.1")
+				  ,("content-type", "text/html; charset=UTF-8")
+				  ,("date", "Mon, 23 May 2005 22:38:34 GMT")
+				  ,("server", "Apache/1.3.3.7 (Unix) (Red-Hat/Linux)")]
+
 	frHeader compressedHeaders = ControlFrameHeader  2 (Set.fromList []) $ headerLength compressedHeaders
 	headerLength compressedHeaders = 6 + (fromIntegral $ BS.length compressedHeaders)
 
-	dataReply payload = Data id (Set.fromList [FLAG_FIN]) $ BS8.pack payload
-
 
 handleFrame fr@(Ping frHeader id) state = do
-    return $ SendFrames [fr]
+    return $ SendFrames [ fr
+			, dataReply id "<html><body>Hello World</body></html>"]
     --return Ignore
 
 handleFrame fr _ = do
@@ -136,11 +153,11 @@ zlibDictionary = SU8.fromString "optionsgetheadpostputdeletetraceacceptaccept-ch
 		\.1statusversionurl\0"
 
 initDeflate :: IO Zlib.Deflate
-initDeflate = Zlib.initDeflateWithDictionary 7 zlibDictionary (Zlib.WindowBits 15) 
+initDeflate = Zlib.initDeflateWithDictionary 6 zlibDictionary defaultWindowBits
 	
 
 initInflate :: IO Zlib.Inflate
-initInflate = Zlib.initInflateWithDictionary (Zlib.WindowBits 15) zlibDictionary
+initInflate = Zlib.initInflateWithDictionary defaultWindowBits zlibDictionary
 
 	    
 main = serveSpdy

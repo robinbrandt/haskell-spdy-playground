@@ -250,7 +250,7 @@ deflateNvHeaders :: Zlib.Deflate -> NvHeaders -> IO BS.ByteString
 deflateNvHeaders defl headers = do
     let lbs = runBitPut $ putNvHeaders headers in do
 	deflated <- foldM (go' defl) Prelude.id $ BL.toChunks lbs
-	deflated' <- Zlib.finishDeflate defl $ go deflated
+	deflated' <- Zlib.flushDeflate defl $ go deflated
 	deflatedBs <- return $ BL.fromChunks $ deflated' []
     
 	return $ toStrict $ runBitPut $ putByteString $ toStrict deflatedBs
