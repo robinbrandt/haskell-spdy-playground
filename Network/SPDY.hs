@@ -130,9 +130,7 @@ handleFrame fr@(SynStream header prio id assoc headers) state = do
 
 
 handleFrame fr@(Ping frHeader id) state = do
-    return $ SendFrames [ fr
-			, dataReply id "<html><body>Hello World</body></html>"]
-    --return Ignore
+    return $ SendFrames [fr]
 
 handleFrame fr _ = do
     print fr
