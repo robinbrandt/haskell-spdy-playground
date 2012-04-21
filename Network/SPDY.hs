@@ -44,8 +44,9 @@ serveSpdy = withSocketsDo $
 	processRequests :: MVar () -> Socket -> IO ()
 	processRequests lock mastersocket = do
 	    (connsock, clientaddr) <- accept mastersocket
+	    handle <- socketToHandle connsock ReadWriteMode
 	    
-	    forkIO $ procMessage lock connsock clientaddr
+	    forkIO $ procMessage lock handle clientaddr
 	    processRequests lock mastersocket
 
 
@@ -64,28 +65,30 @@ initState = do
     deflate <- initDeflate
     return $ SpdyConnectionState inflate deflate
 
-procMessage lock connsock clientaddr = do
+procMessage lock handle clientaddr = do
     state <- initState
 
     let loop = do
-	recvdata <- readMessage connsock 1024
+	hWaitForInput handle (-1)	
+	recvdata <- BS.hGetSome handle 4096
 	putTraceMsg ("received " ++ (show $ BS8.length recvdata ) ++ " bytes")
 	resp <- handleData state recvdata
 	case resp of
 	    SendFrames frames -> do
 				putTraceMsg $ "--> sending " ++ (show frames)
-				mapM_ (\fr -> sendData connsock fr) frames
+				mapM_ (\fr -> sendData handle fr) frames
 				loop
 	    Ignore -> do
 			print "Ignoring..."
 			loop
-	    Close -> sClose connsock
+	    Close -> hClose handle
     loop
 
     where
-	sendData connsock frame = do
+	sendData handle frame = do
 	    putTraceMsg ("sending " ++ (show $ BS8.length raw) ++ " bytes")
-	    send connsock raw
+	    hPut handle raw
+	    hFlush handle
 	    where
 		raw = SP.serialize frame
 	    
