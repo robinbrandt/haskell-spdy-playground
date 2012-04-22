@@ -66,6 +66,7 @@ initState = do
     return $ SpdyConnectionState inflate deflate
 
 procMessage lock handle clientaddr = do
+    putTraceMsg "A new client connected"
     state <- initState
 
     let loop = do
@@ -73,15 +74,8 @@ procMessage lock handle clientaddr = do
 	recvdata <- BS.hGetSome handle 4096
 	putTraceMsg ("received " ++ (show $ BS8.length recvdata ) ++ " bytes")
 	resp <- handleData state recvdata
-	case resp of
-	    SendFrames frames -> do
-				putTraceMsg $ "--> sending " ++ (show frames)
-				mapM_ (\fr -> sendData handle fr) frames
-				loop
-	    Ignore -> do
-			print "Ignoring..."
-			loop
-	    Close -> hClose handle
+	forM_ resp processReply
+	loop
     loop
 
     where
@@ -91,25 +85,32 @@ procMessage lock handle clientaddr = do
 	    hFlush handle
 	    where
 		raw = SP.serialize frame
-	    
-	readMessage connsock buflen = do
-	    part <- recv connsock buflen
-	    if (BS.length part) < buflen
-	     then
-		return part
-	     else do
-		rest <- readMessage connsock buflen
-		return $ part `append` rest
+	
+	processReply resp = case resp of
+				SendFrames frames -> do
+				    putTraceMsg $ "--> sending " ++ (show frames)
+				    mapM_ (\fr -> sendData handle fr) frames
+				Ignore -> do
+				    print "Ignoring..."
 
-handleData :: SpdyConnectionState -> ByteString -> IO SpdyFrameResponse
+handleData :: SpdyConnectionState -> ByteString -> IO [SpdyFrameResponse]
 handleData state bs = do
     case SP.parse bs of
 	Nothing -> fail $ "cannot decode " ++ (show $ BS.length bs)
-	Just frame -> do
-	    print frame
-	    handleFrame frame state
+	Just (frame, rest) -> do
+	    putTraceMsg $ "received frame " ++ show frame ++ " rest " ++ show rest
+	    handleParseResult frame rest
+    where
+	handleParseResult frame 0 = do
+					res <- handleFrame frame state
+					return [res]
+	handleParseResult frame rest = 
+	    handleFrame frame state >>= (\res -> do
+					    nextRes <- handleData state (BS.drop (BS.length bs - rest) bs)
+					    return $ res:nextRes)
 
-dataReply id payload = Data id (Set.fromList [FLAG_FIN]) $ BS8.pack payload
+
+dataReply id payload = Data id (Set.fromList [FLAG_FIN]) payload
     
     
 handleFrame :: SP.Frame -> SpdyConnectionState -> IO SpdyFrameResponse
@@ -117,16 +118,17 @@ handleFrame fr@(SynStream header prio id assoc headers) state = do
     hd <- SP.inflateNvHeaders (zlibInflate state) headers
     compressedHeaders <- SP.deflateNvHeaders (zlibDeflate state) newHeaders
     
+    -- insecure by intention
+    payload <- BS.readFile ("public/" ++ (hd ! "url"))
+    
     putTraceMsg $ "request headers: " ++ (show hd)
     return $ SendFrames [ synReply compressedHeaders
-			, dataReply id "<html><body>Hello World</body></html>"]
+			, dataReply id payload]
     where
 	synReply compressedHeaders = SynReply (frHeader compressedHeaders) id compressedHeaders
 	newHeaders = Map.fromList [("status","200 OK")
 				  ,("version", "HTTP/1.1")
-				  ,("content-type", "text/html; charset=UTF-8")
-				  ,("date", "Mon, 23 May 2005 22:38:34 GMT")
-				  ,("server", "Apache/1.3.3.7 (Unix) (Red-Hat/Linux)")]
+				  ,("content-type", "text/html; charset=UTF-8")]
 
 	frHeader compressedHeaders = ControlFrameHeader  2 (Set.fromList []) $ headerLength compressedHeaders
 	headerLength compressedHeaders = 6 + (fromIntegral $ BS.length compressedHeaders)
@@ -136,7 +138,7 @@ handleFrame fr@(Ping frHeader id) state = do
     return $ SendFrames [fr]
 
 handleFrame fr _ = do
-    print fr
+    putTraceMsg $ "received an unimplemented frame " ++ show fr
     return Ignore
 
 zlibDictionary = SU8.fromString "optionsgetheadpostputdeletetraceacceptaccept-charsetaccept-encodingaccept-\

@@ -124,12 +124,14 @@ data Frame = SynStream {
 	deriving (Show, Eq)
 	      
 
-parseFrame :: BG.BitGet Frame
+parseFrame :: BG.BitGet (Frame, Int)
 parseFrame = do
     isControl <- BG.getBit
-    if isControl 
-	then parseControl
-	else parseData
+    frame <- if isControl 
+		then parseControl
+		else parseData
+    remaining <- BG.remaining
+    return (frame, remaining `div` 8)
 
 parseControl :: BG.BitGet Frame
 parseControl = do
@@ -321,10 +323,10 @@ parseBitSet lst = do
     let onlySetBits = \(flag, bitValue) -> flags .&. bitValue == bitValue
 	in return $ Set.fromList $ map fst $ filter onlySetBits lst
 
-parse :: BS.ByteString -> Maybe Frame
+parse :: BS.ByteString -> Maybe (Frame, Int)
 parse bs = case BG.runBitGet bs parseFrame of
 	    Left err -> Nothing
-	    Right frame -> Just frame 
+	    Right ret -> Just ret 
 
 -- | Serialization 
 --
